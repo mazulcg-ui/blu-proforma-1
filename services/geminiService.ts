@@ -5,6 +5,9 @@ const API_KEY = 'AIzaSyDPPyes3JWO2TR1bA3lgerKncmcsoXvpxM';
 
 const ai = new GoogleGenAI({ apiKey: API_KEY });
 
+const MAX_RETRIES = 3;
+const INITIAL_DELAY_MS = 1000;
+
 const buildPrompt = (invoiceText: string): string => {
     return `
       You are an expert AI assistant for "Validador de Factura 360 Comex Pro Forma", specializing in auditing pro forma invoices for international trade. Your primary and most critical function is to validate the consistency between the seller's company name and the bank account beneficiary.
@@ -108,37 +111,53 @@ const buildPrompt = (invoiceText: string): string => {
 
 export const analyzeInvoice = async (invoiceText: string): Promise<AnalysisResult> => {
     const prompt = buildPrompt(invoiceText);
-    
-    try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt,
-        });
+    let lastError: Error | null = null;
 
-        const rawText = response.text;
-        const parts = rawText.split('---JSON_OUTPUT---');
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        try {
+            const response = await ai.models.generateContent({
+                model: 'gemini-2.5-flash',
+                contents: prompt,
+            });
 
-        if (parts.length < 2) {
-            throw new Error('Invalid response format from API. Could not find separator.');
+            const rawText = response.text;
+            const parts = rawText.split('---JSON_OUTPUT---');
+
+            if (parts.length < 2) {
+                throw new Error('Invalid response format from API. Could not find separator.');
+            }
+
+            const visualReport = parts[0].trim();
+            let jsonString = parts[1].trim();
+
+            // Clean up potential markdown code block fences
+            if (jsonString.startsWith('```json')) {
+                jsonString = jsonString.substring(7);
+            }
+            if (jsonString.endsWith('```')) {
+                jsonString = jsonString.slice(0, -3);
+            }
+
+            const jsonData: InvoiceJsonData = JSON.parse(jsonString);
+
+            // Success, return the result
+            return { visualReport, jsonData };
+
+        } catch (error) {
+            lastError = error as Error;
+            console.error(`Error calling Gemini API on attempt ${attempt + 1}/${MAX_RETRIES}:`, error);
+
+            if (attempt < MAX_RETRIES - 1) {
+                const delay = INITIAL_DELAY_MS * Math.pow(2, attempt);
+                console.log(`Retrying in ${delay}ms...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
         }
-
-        const visualReport = parts[0].trim();
-        let jsonString = parts[1].trim();
-        
-        // Clean up potential markdown code block fences
-        if (jsonString.startsWith('```json')) {
-            jsonString = jsonString.substring(7);
-        }
-        if (jsonString.endsWith('```')) {
-            jsonString = jsonString.slice(0, -3);
-        }
-
-        const jsonData: InvoiceJsonData = JSON.parse(jsonString);
-
-        return { visualReport, jsonData };
-
-    } catch (error) {
-        console.error("Error calling Gemini API:", error);
-        throw new Error("Failed to get analysis from Gemini API.");
     }
+
+    console.error("Failed to get analysis from Gemini API after all retries.");
+    if (lastError && lastError.message.includes('503')) {
+        throw new Error("El servicio de análisis está sobrecargado. Por favor, intente de nuevo en unos momentos.");
+    }
+    throw new Error("No se pudo obtener el análisis de la API después de varios intentos.");
 };
