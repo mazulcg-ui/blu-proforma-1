@@ -1,0 +1,5 @@
+{
+  "name": "Validador de Factura 360 Comex Pro Forma",
+  "description": "Una herramienta de IA para auditar facturas pro forma, especializada en el análisis de consistencia entre la Razón Social del vendedor y el titular de la cuenta bancaria.",
+  "requestFramePermissions": []
+}
